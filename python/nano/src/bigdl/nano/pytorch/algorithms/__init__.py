@@ -14,5 +14,8 @@
 # limitations under the License.
 #
 
-# import public APIs of openvino
-from bigdl.nano.deps.openvino.openvino_api import OpenVINOModel
+from bigdl.nano.pytorch.algorithms.selective_backprop import SelectiveBackprop
+
+__all__ = [
+    'SelectiveBackprop',
+]
