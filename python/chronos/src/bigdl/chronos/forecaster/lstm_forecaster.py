@@ -101,7 +101,8 @@ class LSTMForecaster(BasePytorchForecaster):
         self.model_config = {
             "hidden_dim": hidden_dim,
             "layer_num": layer_num,
-            "dropout": dropout
+            "dropout": dropout,
+            "seed": seed
         }
         self.loss_config = {
             "loss": loss
@@ -123,7 +124,8 @@ class LSTMForecaster(BasePytorchForecaster):
 
         # distributed settings
         self.distributed = distributed
-        self.distributed_backend = distributed_backend
+        self.remote_distributed_backend = distributed_backend
+        self.local_distributed_backend = "subprocess"
         self.workers_per_node = workers_per_node
 
         # other settings

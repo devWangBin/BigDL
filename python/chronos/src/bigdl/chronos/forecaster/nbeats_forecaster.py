@@ -121,7 +121,8 @@ class NBeatsForecaster(BasePytorchForecaster):
             "thetas_dim": thetas_dim,
             "share_weights_in_stack": share_weights_in_stack,
             "hidden_layer_units": hidden_layer_units,
-            "nb_harmonics": nb_harmonics
+            "nb_harmonics": nb_harmonics,
+            "seed": seed,
         }
 
         self.loss_config = {
@@ -145,7 +146,8 @@ class NBeatsForecaster(BasePytorchForecaster):
 
         # distributed settings
         self.distributed = distributed
-        self.distributed_backend = distributed_backend
+        self.remote_distributed_backend = distributed_backend
+        self.local_distributed_backend = "subprocess"
         self.workers_per_node = workers_per_node
 
         # other settings

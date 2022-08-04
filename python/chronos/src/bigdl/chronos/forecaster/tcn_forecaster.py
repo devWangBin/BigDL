@@ -112,7 +112,8 @@ class TCNForecaster(BasePytorchForecaster):
             "num_channels": num_channels,
             "kernel_size": kernel_size,
             "repo_initialization": repo_initialization,
-            "dropout": dropout
+            "dropout": dropout,
+            "seed": seed
         }
         self.loss_config = {
             "loss": loss
@@ -134,7 +135,8 @@ class TCNForecaster(BasePytorchForecaster):
 
         # distributed settings
         self.distributed = distributed
-        self.distributed_backend = distributed_backend
+        self.remote_distributed_backend = distributed_backend
+        self.local_distributed_backend = "subprocess"
         self.workers_per_node = workers_per_node
 
         # other settings

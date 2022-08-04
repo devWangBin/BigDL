@@ -11,12 +11,12 @@ cloudpickle==2.1.0
 ray[tune]==1.9.2
 ray==1.9.2
 torch==1.9.0
-Pygments==2.3.1
+Pygments==2.6.1
 setuptools==41.0.1
 docutils==0.17
 mock==1.0.1
 pillow==5.4.1
-sphinx==5.0.2
+sphinx==4.5.0
 alabaster>=0.7,<0.8,!=0.7.5
 commonmark==0.8.1
 recommonmark==0.5.0
@@ -35,3 +35,6 @@ protobuf~=3.19.0
 sphinx-tabs==3.4
 optuna==2.10.0
 ConfigSpace==0.5.0
+sphinx-design==0.2.0
+sphinx-external-toc==0.3.0
+nbsphinx==0.8.9
