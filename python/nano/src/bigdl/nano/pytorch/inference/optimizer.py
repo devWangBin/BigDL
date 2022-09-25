@@ -180,11 +180,18 @@ class InferenceOptimizer:
         st = time.perf_counter()
         try:
             with torch.no_grad():
-                model(*input_sample)
+                if isinstance(input_sample, Dict):
+                    model(input_sample)
+                else:
+                    model(*input_sample)
         except Exception:
             invalidInputError(False,
                               "training_data is incompatible with your model input.")
         baseline_time = time.perf_counter() - st
+        if baseline_time > 0.1:  # 100ms
+            sample_size_for_pot = 15
+        else:
+            sample_size_for_pot = 100
 
         print("==========================Start Optimization==========================")
         start_time = time.perf_counter()
@@ -240,6 +247,7 @@ class InferenceOptimizer:
                                                         calib_dataloader=training_data,
                                                         method=ort_method,
                                                         thread_num=thread_num,
+                                                        sample_size=sample_size_for_pot,
                                                         # remove output of openvino
                                                         logging=logging)
                     except Exception as e:
@@ -252,14 +260,17 @@ class InferenceOptimizer:
 
                 def func_test(model, input_sample):
                     with torch.no_grad():
-                        model(*input_sample)
+                        if isinstance(input_sample, Dict):
+                            model(input_sample)
+                        else:
+                            model(*input_sample)
 
                 torch.set_num_threads(thread_num)
                 try:
                     result_map[method]["latency"], status =\
                         _throughput_calculate_helper(latency_sample_num, baseline_time,
                                                      func_test, acce_model, input_sample)
-                    if status is False:
+                    if status is False and method != "original":
                         result_map[method]["status"] = "early stopped"
                         torch.set_num_threads(default_threads)
                         continue
@@ -290,8 +301,11 @@ class InferenceOptimizer:
 
         self._optimize_result = _format_optimize_result(self.optimized_model_dict,
                                                         self._calculate_accuracy)
+        # save time cost to self._optimize_result
+        time_cost = time.perf_counter() - start_time
+        time_cost_str = f"Optimization cost {time_cost:.1f}s in total."
+        self._optimize_result += time_cost_str
         print(self._optimize_result)
-        print("Optimization cost {:.3}s at all.".format(time.perf_counter() - start_time))
         print("===========================Stop Optimization===========================")
 
     def summary(self):
@@ -395,6 +409,7 @@ class InferenceOptimizer:
                  input_sample=None,
                  thread_num: int = None,
                  onnxruntime_session_options=None,
+                 sample_size: int = 100,
                  logging: bool = True,
                  **export_kwargs):
         """
@@ -443,6 +458,9 @@ class InferenceOptimizer:
                            or accelerator='openvino'.
         :param onnxruntime_session_options: The session option for onnxruntime, only valid when
                                             accelerator='onnxruntime', otherwise will be ignored.
+        :param sample_size: (optional) a int represents how many samples will be used for
+                            Post-training Optimization Tools (POT) from OpenVINO toolkit,
+                            only valid for accelerator='openvino'. default to 100.
         :param logging: whether to log detailed information of model conversion, only valid when
                         accelerator='openvino', otherwise will be ignored. default: True.
         :param **export_kwargs: will be passed to torch.onnx.export function.
@@ -549,7 +567,7 @@ class InferenceOptimizer:
                     "max_iter_num": max_trials,
                     # TODO following two keys are optional, if there is need, we can add them
                     # "n_requests": None,
-                    # "sample_size": 300
+                    "sample_size": sample_size
                 }
                 return model.pot(calib_dataloader, **kwargs)
             else:
@@ -673,7 +691,7 @@ def _openvino_checker():
     '''
     check if openvino-dev is installed
     '''
-    return not find_spec("openvino-dev") is None
+    return not find_spec("openvino") is None
 
 
 def _bf16_checker():
