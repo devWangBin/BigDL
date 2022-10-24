@@ -127,10 +127,14 @@ class TemporalConvNet(nn.Module):
         self.linear.weight.data.normal_(0, 0.01)
 
     def forward(self, x):
+        # x: [Batch, Input length, Channel]
+        seq_last = x[:, -1:, :].detach()
+        x = x - seq_last
         x = x.permute(0, 2, 1)
         y = self.tcn(x)
         y = self.linear(y)
         y = y.permute(0, 2, 1)
+        y = y + seq_last
         return y
 
 
