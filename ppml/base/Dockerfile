@@ -10,8 +10,6 @@ ARG JDK_URL
 
 ENV BIGDL_VERSION                       ${BIGDL_VERSION}
 ENV LOCAL_IP                            127.0.0.1
-ENV SGX_MEM_SIZE                        32G
-ENV SGX_LOG_LEVEL                       error
 ENV LC_ALL                              C.UTF-8
 ENV LANG                                C.UTF-8
 ENV JAVA_HOME                           /opt/jdk8
@@ -94,8 +92,13 @@ RUN env DEBIAN_FRONTEND=noninteractive apt-get update && \
     rm jdk-$JDK_VERSION-linux-x64.tar && \
     mv /opt/jdk* /opt/jdk8 && \
     ln -s /opt/jdk8 /opt/jdk && \
-# related dirs
-    mkdir -p /root/.cache/
+# related dirs required by bash.manifest
+    mkdir -p /root/.cache/ && \
+    mkdir -p /root/.keras/datasets && \
+    mkdir -p /root/.zinc && \
+    mkdir -p /root/.m2 && \
+    mkdir -p /root/.kube/
+
 
 ADD ./download_jars.sh /ppml
 
