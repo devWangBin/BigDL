@@ -53,6 +53,7 @@ class TCNForecaster(BasePytorchForecaster):
                  lr=0.001,
                  metrics=["mse"],
                  seed=None,
+                 use_normalization=False,
                  distributed=False,
                  workers_per_node=1,
                  distributed_backend="ray"):
@@ -91,6 +92,11 @@ class TCNForecaster(BasePytorchForecaster):
                should be func(y_true, y_pred), where y_true and y_pred are numpy
                ndarray.
         :param seed: int, random seed for training. This value defaults to None.
+        :param use_normalization: bool, If True, it first subtracts the input by
+               the last value of the sequence. Then, the input goes through TCN,
+               and the subtracted part is added back before making the final
+               prediction. The subtraction and addition are a simple normalization
+               for the input sequence.
         :param distributed: bool, if init the forecaster in a distributed
                fashion. If True, the internal model will use an Orca Estimator.
                If False, the internal model will use a pytorch model. The value
@@ -113,7 +119,9 @@ class TCNForecaster(BasePytorchForecaster):
             "kernel_size": kernel_size,
             "repo_initialization": repo_initialization,
             "dropout": dropout,
-            "seed": seed
+            "seed": seed,
+            "use_normalization": use_normalization
+
         }
         self.loss_config = {
             "loss": loss

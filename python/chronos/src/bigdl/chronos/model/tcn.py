@@ -102,11 +102,13 @@ class TemporalConvNet(nn.Module):
                  kernel_size=3,
                  dropout=0.1,
                  repo_initialization=True,
-                 seed=None):
+                 seed=None,
+                 use_normalization=False):
         super(TemporalConvNet, self).__init__()
         seed_everything(seed, workers=True)
         num_channels.append(output_feature_num)
-
+        self.output_feature_num = output_feature_num
+        self.use_normalization = use_normalization
         layers = []
         num_levels = len(num_channels)
         for i in range(num_levels):
@@ -128,13 +130,16 @@ class TemporalConvNet(nn.Module):
 
     def forward(self, x):
         # x: [Batch, Input length, Channel]
-        seq_last = x[:, -1:, :].detach()
-        x = x - seq_last
+        if self.use_normalization:
+            seq_last = x[:, -1:, :].detach()
+            x = x - seq_last
+            seq_last = seq_last[:, :, :self.output_feature_num]  # for add_dt_feature
         x = x.permute(0, 2, 1)
         y = self.tcn(x)
         y = self.linear(y)
         y = y.permute(0, 2, 1)
-        y = y + seq_last
+        if self.use_normalization:
+            y = y + seq_last
         return y
 
 
@@ -156,7 +161,8 @@ def model_creator(config):
                            kernel_size=config.get("kernel_size", 7),
                            dropout=config.get("dropout", 0.2),
                            repo_initialization=config.get("repo_initialization", True),
-                           seed=config.get("seed", None))
+                           seed=config.get("seed", None),
+                           use_normalization=config.get("use_normalization", False))
 
 
 def optimizer_creator(model, config):
