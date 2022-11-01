@@ -14,8 +14,8 @@
 # limitations under the License.
 # ==============================================================================
 # Most of the pytorch code is adapted from:
-# https://github.com/IntelAI/models/blob/master/quickstart/image_recognition/
-# pytorch/resnet50/inference/cpu
+# https://github.com/IntelAI/models/blob/master/models/image_recognition/
+# pytorch/common/main.py
 #
 
 import os
@@ -43,6 +43,8 @@ parser.add_argument("--cores", type=int, default=4,
                     help="The number of cores on each node.")
 parser.add_argument("--num_nodes", type=int, default=1,
                     help="The number of nodes to use.")
+parser.add_argument('--backend', type=str, default="ray",
+                    help='The backend of PyTorch Estimator, either ray or spark.')
 parser.add_argument('--workers_per_node', default=1, type=int,
                     help='The number of torch runners on each node.')
 parser.add_argument('--ipex', action='store_true', default=False,
@@ -115,14 +117,16 @@ class ResNetPerfOperator(TrainingOperator):
 
         # TODO: support warmup
         with torch.no_grad():
+            if self.config["dummy"]:
+                images = torch.randn(self.config["batch"], 3, 224, 224)
+                target = torch.arange(1, self.config["batch"] + 1).long()
+                batch = images, target
+            else:
+                batch = None
             for batch_idx in range(num_steps):
                 batch_info = {"batch_idx": batch_idx}
                 batch_info.update(info)
-                if self.config["dummy"]:
-                    images = torch.randn(self.config["batch"], 3, 224, 224)
-                    target = torch.arange(1, self.config["batch"] + 1).long()
-                    batch = images, target
-                else:
+                if not self.config["dummy"]:
                     batch = next(val_iterator)
                 output, target, loss = self.forward_batch(batch, batch_info)
                 if self.use_tqdm and self.world_rank == 0:
@@ -171,16 +175,15 @@ def main():
     if args.jit and args.int8:
         invalidInputError(False, "jit path is not available for int8 path using ipex")
     if not args.ipex:
-        # for offical pytorch, int8 and jit path is not enabled.
-        invalidInputError(not args.int8, "int8 path is not enabled for offical pytorch")
-        invalidInputError(not args.jit, "jit path is not enabled for offical pytorch")
+        # for official pytorch, int8 and jit path is not enabled.
+        invalidInputError(not args.int8, "int8 path is not enabled for official pytorch")
+        invalidInputError(not args.jit, "jit path is not enabled for official pytorch")
 
     env = {"MALLOC_CONF": "oversize_threshold:1,background_thread:true,metadata_thp:"
                           "auto,dirty_decay_ms:9000000000,muzzy_decay_ms:9000000000",
            "DNNL_PRIMITIVE_CACHE_CAPACITY": "1024",
            "KMP_BLOCKTIME": "1",
-           "KMP_AFFINITY": "granularity=fine,compact,1,0",
-           "SSL_CERT_DIR": "/etc/ssl/certs"}
+           "KMP_AFFINITY": "granularity=fine,compact,1,0"}
     if "LD_PRELOAD" in os.environ:
         env["LD_PRELOAD"] = os.environ["LD_PRELOAD"]
 
@@ -189,7 +192,7 @@ def main():
     elif args.cluster_mode == "standalone":
         init_orca_context("standalone", master=args.master,
                           cores=args.cores, num_nodes=args.num_nodes,
-                          memory="10g", driver_cores=4, driver_memory="2g", env=env)
+                          memory="10g", driver_cores=1, driver_memory="2g", env=env)
     elif args.cluster_mode == "yarn":
         init_orca_context("yarn-client", cores=args.cores,
                           num_nodes=args.num_nodes, memory="10g",
@@ -311,15 +314,13 @@ def validate(args):
     from bigdl.orca.learn.metrics import Accuracy
 
     config = vars(args).copy()
-    config["number_iter"] = number_iter
     batch = config.pop("batch_size")
-    config["batch"] = batch
-    backend = "ray"
+    config["batch"] = batch  # Dummy data needs batch_size in TrainingOperator
     est = Estimator.from_torch(model=model_creator,
                                optimizer=optimizer_creator,
                                loss=nn.CrossEntropyLoss(),
                                metrics=[Accuracy()],
-                               backend=backend,
+                               backend=args.backend,
                                config=config,
                                workers_per_node=args.workers_per_node,
                                training_operator_cls=ResNetPerfOperator,
