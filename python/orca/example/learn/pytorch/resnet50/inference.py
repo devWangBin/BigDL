@@ -44,7 +44,7 @@ parser.add_argument("--cores", type=int, default=4,
 parser.add_argument("--num_nodes", type=int, default=1,
                     help="The number of nodes to use.")
 parser.add_argument('--workers_per_node', default=1, type=int,
-                    help='number of torch workers on each node (default: 1)')
+                    help='The number of torch runners on each node.')
 parser.add_argument('--ipex', action='store_true', default=False,
                     help='use intel pytorch extension')
 parser.add_argument('--jit', action='store_true', default=False,
@@ -53,8 +53,10 @@ parser.add_argument('--int8', action='store_true', default=False,
                     help='enable ipex int8 path')
 parser.add_argument('--bf16', action='store_true', default=False,
                     help='enable ipex bf16 path')
+parser.add_argument('--bf32', action='store_true', default=False,
+                    help='enable ipex bf32 path')
 parser.add_argument('-b', '--batch_size', default=256, type=int)
-parser.add_argument('--workers', default=4, type=int,
+parser.add_argument('-j', '--workers', default=4, type=int, metavar='N',
                     help='number of data loading workers (default: 4)')
 parser.add_argument("--dummy", action='store_true',
                     help="using dummy data to test the performance of inference")
@@ -68,6 +70,8 @@ parser.add_argument('--calibration', action='store_true', default=False,
                     help='doing calibration step for int8 path')
 parser.add_argument('--configure_dir', default='configure.json', type=str, metavar='PATH',
                     help='path to int8 configures, default file name is configure.json')
+parser.add_argument('--seed', default=None, type=int,
+                    help='seed for initializing training')
 
 
 class ResNetPerfOperator(TrainingOperator):
@@ -78,7 +82,6 @@ class ResNetPerfOperator(TrainingOperator):
         losses = []
         total_samples = 0
 
-        # TODO: not sure if this is needed
         if self.config["ipex"] and self.config["int8"] and self.config["calibration"]:
             print("running int8 calibration step\n")
             import intel_extension_for_pytorch as ipex
@@ -100,20 +103,27 @@ class ResNetPerfOperator(TrainingOperator):
                 prepared_model.save_qconf_summary(self.config["configure_dir"])
                 print(".........calibration step done..........")
 
+        if not num_steps:
+            num_steps = len(val_iterator)
+
         if self.use_tqdm and self.world_rank == 0:
             from tqdm import tqdm
             _progress_bar = tqdm(
-                total=len(val_iterator),
+                total=num_steps,
                 unit="batch",
                 leave=False)
 
         # TODO: support warmup
         with torch.no_grad():
-            for batch_idx, batch in enumerate(val_iterator):
-                if num_steps and batch_idx == num_steps:
-                    break
+            for batch_idx in range(num_steps):
                 batch_info = {"batch_idx": batch_idx}
                 batch_info.update(info)
+                if self.config["dummy"]:
+                    images = torch.randn(self.config["batch"], 3, 224, 224)
+                    target = torch.arange(1, self.config["batch"] + 1).long()
+                    batch = images, target
+                else:
+                    batch = next(val_iterator)
                 output, target, loss = self.forward_batch(batch, batch_info)
                 if self.use_tqdm and self.world_rank == 0:
                     _progress_bar.n = batch_idx + 1
@@ -134,13 +144,13 @@ class ResNetPerfOperator(TrainingOperator):
 
     def forward_batch(self, batch, batch_info):
         images, target = batch
+        if self.config["ipex"]:
+            images = images.contiguous(memory_format=torch.channels_last)
+        if self.config["bf16"]:
+            images = images.to(torch.bfloat16)
 
         # compute output
         with self.timers.record("eval_fwd"):
-            if self.config["ipex"]:
-                images = images.contiguous(memory_format=torch.channels_last)
-            if self.config["bf16"]:
-                images = images.to(torch.bfloat16)
             if not self.config["jit"] and self.config["bf16"]:
                 with torch.cpu.amp.autocast():
                     output = self.model(images)
@@ -154,21 +164,6 @@ class ResNetPerfOperator(TrainingOperator):
         return output, target, loss
 
 
-class DummyData(torch.utils.data.Dataset):
-
-    def __init__(self, size):
-        self.len = size
-        self.features = torch.randn(self.len, 3, 224, 224)
-        self.labels = torch.randint(1, 1000, size=(self.len, )).long()
-
-    def __len__(self):
-        return self.len
-
-    # TODO: This may not be efficient
-    def __getitem__(self, idx):
-        return self.features[idx], self.labels[idx]
-
-
 def main():
     args = parser.parse_args()
     print(args)
@@ -180,16 +175,25 @@ def main():
         invalidInputError(not args.int8, "int8 path is not enabled for offical pytorch")
         invalidInputError(not args.jit, "jit path is not enabled for offical pytorch")
 
+    env = {"MALLOC_CONF": "oversize_threshold:1,background_thread:true,metadata_thp:"
+                          "auto,dirty_decay_ms:9000000000,muzzy_decay_ms:9000000000",
+           "DNNL_PRIMITIVE_CACHE_CAPACITY": "1024",
+           "KMP_BLOCKTIME": "1",
+           "KMP_AFFINITY": "granularity=fine,compact,1,0",
+           "SSL_CERT_DIR": "/etc/ssl/certs"}
+    if "LD_PRELOAD" in os.environ:
+        env["LD_PRELOAD"] = os.environ["LD_PRELOAD"]
+
     if args.cluster_mode == "local":
         init_orca_context("local", cores=args.cores, memory="10g")
     elif args.cluster_mode == "standalone":
         init_orca_context("standalone", master=args.master,
                           cores=args.cores, num_nodes=args.num_nodes,
-                          memory="10g", driver_cores=4, driver_memory="2g")
+                          memory="10g", driver_cores=4, driver_memory="2g", env=env)
     elif args.cluster_mode == "yarn":
         init_orca_context("yarn-client", cores=args.cores,
                           num_nodes=args.num_nodes, memory="10g",
-                          driver_cores=4, driver_memory="2g")
+                          driver_cores=4, driver_memory="2g", env=env)
     else:
         invalidInputError(False,
                           "cluster_mode should be one of 'local', 'yarn' and 'standalone', "
@@ -201,32 +205,28 @@ def main():
 def validate(args):
 
     def val_loader_func(config, batch_size):
-        if not args.dummy:
-            # Data loading code
-            invalidInputError(args.data is not None,
-                              "please set dataset path if you want to using real data")
-            valdir = os.path.join(args.data, 'val')
-            normalize = transforms.Normalize(mean=[0.485, 0.456, 0.406],
-                                             std=[0.229, 0.224, 0.225])
-            val_loader = torch.utils.data.DataLoader(
-                datasets.ImageFolder(valdir, transforms.Compose([
-                    transforms.Resize(256),
-                    transforms.CenterCrop(224),
-                    transforms.ToTensor(),
-                    normalize,
-                ])),
-                batch_size=batch_size, shuffle=False,
-                num_workers=args.workers, pin_memory=True)
-        else:
-            # TODO: dummy data may not need dataloader?
-            # dummy data, always running channel last for fp32, bf16, int8
-            val_loader = torch.utils.data.DataLoader(
-                DummyData(config["number_iter"] * batch_size),
-                batch_size=batch_size, shuffle=False,
-                num_workers=args.workers, pin_memory=True)
+        # Data loading code
+        invalidInputError(args.data is not None,
+                          "please set dataset path if you want to using real data")
+        valdir = os.path.join(args.data, 'val')
+        normalize = transforms.Normalize(mean=[0.485, 0.456, 0.406],
+                                         std=[0.229, 0.224, 0.225])
+        val_loader = torch.utils.data.DataLoader(
+            datasets.ImageFolder(valdir, transforms.Compose([
+                transforms.Resize(256),
+                transforms.CenterCrop(224),
+                transforms.ToTensor(),
+                normalize,
+            ])),
+            batch_size=batch_size, shuffle=False,
+            num_workers=args.workers, pin_memory=True)
         return val_loader
 
     def model_creator(config):
+        if args.seed is not None:
+            import random
+            random.seed(args.seed)
+            torch.manual_seed(args.seed)
         arch = 'resnet50'
         if args.hub:
             torch.set_flush_denormal(True)
@@ -241,11 +241,11 @@ def validate(args):
                 model = models.__dict__[arch]()
 
         if args.ipex:
+            model.eval()
             print("using ipex model to do inference\n")
             import intel_extension_for_pytorch as ipex
 
             if args.int8:
-                model.eval()
                 if not args.calibration:
                     from torch.ao.quantization import MinMaxObserver, \
                         PerChannelMinMaxObserver, QConfig
@@ -269,12 +269,11 @@ def validate(args):
                 # for ipex path, always convert model to channels_last for bf16, fp32.
                 # TODO: int8 path: https://jira.devtools.intel.com/browse/MFDNN-6103
                 model = model.to(memory_format=torch.channels_last)
-                model.eval()
 
                 if args.bf32:
                     ipex.set_fp32_math_mode(mode=ipex.FP32MathMode.BF32, device="cpu")
                     print("using bf32 fmath mode\n")
-                elif args.bf16:
+                if args.bf16:
                     model = ipex.optimize(model, dtype=torch.bfloat16, inplace=True)
                     print("running bfloat16 evaluation step\n")
                 else:
@@ -299,10 +298,7 @@ def validate(args):
         return model
 
     def optimizer_creator(model, config):
-        optimizer = torch.optim.SGD(model.parameters(), lr=0.1,
-                                    momentum=0.9,
-                                    weight_decay=1e-4)
-        return optimizer
+        return None
 
     if args.dummy:
         number_iter = args.steps if args.steps > 0 else 200
@@ -314,9 +310,10 @@ def validate(args):
     from bigdl.orca.learn.pytorch import Estimator
     from bigdl.orca.learn.metrics import Accuracy
 
-    config = vars(args)
+    config = vars(args).copy()
     config["number_iter"] = number_iter
-    batch_size = config.pop("batch_size")
+    batch = config.pop("batch_size")
+    config["batch"] = batch
     backend = "ray"
     est = Estimator.from_torch(model=model_creator,
                                optimizer=optimizer_creator,
@@ -328,23 +325,23 @@ def validate(args):
                                training_operator_cls=ResNetPerfOperator,
                                use_tqdm=True)
 
-    result = est.evaluate(data=val_loader_func, batch_size=batch_size,
+    result = est.evaluate(data=val_loader_func, batch_size=args.batch_size,
                           num_steps=number_iter, profile=True)
     for r in result:
         print("{}: {}".format(r, result[r]))
 
     print('---------')
     print('total number of records:', result['num_samples'])
-    print('batch_size for each worker:', batch_size)
+    print('batch_size for each worker:', args.batch_size)
     num_samples_per_worker = result['num_samples'] / (args.workers_per_node * args.num_nodes)
     print('num_samples for each worker: around', num_samples_per_worker)
-    print('num_batches for each worker: around', num_samples_per_worker // batch_size)
+    print('num_batches for each worker: around', num_samples_per_worker // args.batch_size)
     mean_validation_s = result['profile']['mean_validation_s']
     mean_eval_fwd_s = result['profile']['mean_eval_fwd_s']
     print('avg_val_time for each worker:', mean_validation_s)
     print('avg_forward_time for each batch:', mean_eval_fwd_s)
-    latency = mean_eval_fwd_s / batch_size * 1000
-    perf = batch_size / mean_eval_fwd_s
+    latency = mean_eval_fwd_s / args.batch_size * 1000
+    perf = args.batch_size / mean_eval_fwd_s
     print('inference latency %.3f ms' % latency)
     print("Throughput: {:.3f} fps".format(perf))
     print("Accuracy: {top1:.3f} ".format(top1=result["Accuracy"]))
