@@ -14,6 +14,7 @@
 # limitations under the License.
 #
 
+import torch
 import torch.nn as nn
 
 
@@ -30,7 +31,8 @@ class NormalizeTSModel(nn.Module):
         self.output_feature_dim = output_feature_dim
 
     def forward(self, x):
-        seq_last = x[:, -1:, :]
+        # seq_last = x[:, -1:, :]
+        seq_last = torch.mean(x, dim=1, keepdim=True)
         x = x - seq_last
         y = self.model(x)
         y = y + seq_last[:, :, :self.output_feature_dim]
