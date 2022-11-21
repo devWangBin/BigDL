@@ -1,3 +1,5 @@
+#!/usr/bin/env bash
+
 #
 # Copyright 2016 The BigDL Authors.
 #
@@ -13,9 +15,22 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 #
-import tensorflow as tf
 
+# Enviroment Settings
+export ANALYTICS_ZOO_ROOT=${ANALYTICS_ZOO_ROOT}
+export CHRONOS_HOME=${ANALYTICS_ZOO_ROOT}/python/chronos/src
+export CHRONOS_BENCHMARK_DIR=${ANALYTICS_ZOO_ROOT}/python/chronos/benchmark
 
-from .Sequential import Sequential
-from .Model import Model
-from .inference.optimizer import InferenceOptimizer
+set -e
+echo "# Start testing"
+start=$(date "+%s")
+
+# Boot-up commands 
+# e.g. python benchmark_program.py 
+bash $CHRONOS_BENCHMARK_DIR/tsdataset_processing/tsdataset_processing_benchmark.sh
+#
+
+now=$(date "+%s")
+time=$((now-start))
+echo ">> All Benchmark test finished"
+echo ">> Time used:$time sec"
