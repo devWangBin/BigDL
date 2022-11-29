@@ -13,14 +13,3 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 #
-
-
-from .lifecycle import LifeCycle
-from .trainable import Trainable
-from .modelIO import ModelIO
-
-from abc import ABCMeta
-
-
-class BaseRunner(Trainable, ModelIO, LifeCycle, metaclass=ABCMeta):
-    pass
