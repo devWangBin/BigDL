@@ -140,21 +140,19 @@ class TestInferencePipeline(TestCase):
         inference_opt.optimize(model=self.model,
                                training_data=self.train_loader,
                                thread_num=1,
-                               search_mode="all",
-                               excludes=["fp32_ipex", "original"])
+                               excludes=["bf16", "original"])
 
         # original is a special method that must be included in
         # the search
         assert "original" in inference_opt.optimized_model_dict
         assert "jit_fp32_ipex" in inference_opt.optimized_model_dict
-        assert "fp32_ipex" not in inference_opt.optimized_model_dict
+        assert "bf16" not in inference_opt.optimized_model_dict
 
     def test_pipeline_with_includes(self):
         inference_opt = InferenceOptimizer()
         inference_opt.optimize(model=self.model,
                                training_data=self.train_loader,
                                thread_num=1,
-                               search_mode="all",
                                includes=["fp32_ipex"])
 
         assert "original" in inference_opt.optimized_model_dict
@@ -454,15 +452,15 @@ class TestInferencePipeline(TestCase):
         for method, option in optim_dict.items():
             if option["status"] == "successful":
                 model = option["model"]
-                with model.context_manager:
+                with InferenceOptimizer.get_context(model):
                     pass
         # test get_model
         for method in list(InferenceOptimizer.ALL_INFERENCE_ACCELERATION_METHOD.keys()):
             if "model" in optim_dict[method]:
                 model = inference_opt.get_model(method)
-                with model.context_manager:
+                with InferenceOptimizer.get_context(model):
                     pass
         # test get_best_model
         model, option = inference_opt.get_best_model()
-        with model.context_manager:
+        with InferenceOptimizer.get_context(model):
             pass

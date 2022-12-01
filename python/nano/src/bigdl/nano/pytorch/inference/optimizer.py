@@ -63,22 +63,15 @@ class TorchAccelerationOption(AccelerationOption):
                     self.channels_last is False:
                 return model
             # trace
-            if accelerator in ("jit", None):
-                acce_model = \
-                    InferenceOptimizer.trace(model=model,
-                                             accelerator=accelerator,
-                                             use_ipex=self.ipex,
-                                             # channels_last is only for jit
-                                             channels_last=self.channels_last,
-                                             input_sample=input_sample)
-            else:
-                acce_model = \
-                    InferenceOptimizer.trace(model=model,
-                                             accelerator=accelerator,
-                                             input_sample=input_sample,
-                                             thread_num=thread_num,
-                                             # remove output of openvino
-                                             logging=logging)
+            acce_model = \
+                InferenceOptimizer.trace(model=model,
+                                         accelerator=accelerator,
+                                         input_sample=input_sample,
+                                         thread_num=thread_num,
+                                         channels_last=self.channels_last,
+                                         use_ipex=self.ipex,
+                                         # remove output of openvino
+                                         logging=logging)
         else:
             # quantize
             ort_method: str = self.method
@@ -87,6 +80,7 @@ class TorchAccelerationOption(AccelerationOption):
                                             precision=self.get_precision(),
                                             accelerator=accelerator,
                                             use_ipex=self.ipex,
+                                            channels_last=self.channels_last,
                                             calib_data=training_data,
                                             input_sample=input_sample,
                                             method=ort_method,
@@ -296,7 +290,8 @@ class InferenceOptimizer(BaseInferenceOptimizer):
         available_dict: Dict =\
             available_acceleration_combination(excludes=excludes,
                                                includes=includes,
-                                               full_methods=all_acceleration_methods)
+                                               full_methods=all_acceleration_methods,
+                                               all_methods=self.ALL_INFERENCE_ACCELERATION_METHOD)
 
         self._direction: str = direction  # save direction as attr
         # record whether calculate accuracy in optimize by this attr
@@ -770,12 +765,25 @@ class InferenceOptimizer(BaseInferenceOptimizer):
         invalidInputError(False, "Accelerator {} is invalid.".format(accelerator))
 
     @staticmethod
+    def get_context(model: nn.Module):
+        """
+        Obtain corresponding context manager from model, defaults to BaseContextManager().
+
+        :param model: Any model of torch.nn.Module, including all models accelareted by
+               InferenceOptimizer.trace/InferenceOptimizer.quantize.
+        :return: a context manager.
+        """
+        if hasattr(model, "context_manager"):
+            return model.context_manager
+        return BaseContextManager()
+
+    @staticmethod
     def save(model: nn.Module, path):
         """
         Save the model to local file.
 
         :param model: Any model of torch.nn.Module, including all models accelareted by
-               Trainer.trace/Trainer.quantize.
+               InferenceOptimizer.trace/InferenceOptimizer.quantize.
         :param path: Path to saved model. Path should be a directory.
         """
         save_model(model, path)
@@ -787,8 +795,9 @@ class InferenceOptimizer(BaseInferenceOptimizer):
 
         :param path: Path to model to be loaded. Path should be a directory.
         :param model: Required FP32 model to load pytorch model, it is needed if you accelerated
-               the model with accelerator=None by Trainer.trace/Trainer.quantize. model
-               should be set to None if you choose accelerator="onnxruntime"/"openvino"/"jit".
+               the model with accelerator=None by InferenceOptimizer.trace/
+               InferenceOptimizer.quantize. model should be set to None if you choose
+               accelerator="onnxruntime"/"openvino"/"jit".
         :return: Model with different acceleration(None/OpenVINO/ONNX Runtime/JIT) or
                  precision(FP32/FP16/BF16/INT8).
         """
